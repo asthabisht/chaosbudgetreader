@@ -1,0 +1,19 @@
+services:
+  - type: cron
+    name: cochaos-rate-watcher
+    runtime: python
+    plan: free
+    schedule: "*/10 * * * *"          # every 10 minutes
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python process_bucket.py"
+    envVars:
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: S3_PREFIX
+        value: quotes

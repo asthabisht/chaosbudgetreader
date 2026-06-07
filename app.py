@@ -1,52 +1,38 @@
-"""FastAPI export service — turns the generator's payload into Enigma-branded files.
-POST /generate  body: {format:"xlsx"|"pdf", filename, header{...}, sections[...]}
-Returns the file as a download. CORS open so the PWA (different origin) can call it.
-Run: uvicorn app:app --host 0.0.0.0 --port 8000
 """
-import os, tempfile, datetime
-from typing import List
-from fastapi import FastAPI, Response
+app.py — optional HTTP wrapper around the rate-card generator.
+
+  POST /process   run an ingest pass now (call this from your site after an upload,
+                  or point a scheduler at it every 5 min). No-op if no new uploads.
+  GET  /rates     returns the current shared rates.json — the OFFLINE generator app
+                  fetches this when online to refresh its cached rate library.
+  GET  /health    liveness check.
+
+Run:  uvicorn app:app --host 0.0.0.0 --port 8000
+"""
+import os, json
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import enigma_export as EE
+from storage import make_storage
+import process_bucket as pb
 
-app = FastAPI(title="Co Chaos Export Service")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="Co Chaos — Rate-Card Generator")
+app.add_middleware(CORSMiddleware,
+    allow_origins=(os.getenv("CORS_ORIGINS", "*").split(",")),
+    allow_methods=["GET", "POST"], allow_headers=["*"])
 
-class Line(BaseModel):
-    item: str; qty: float = 1; unitBuy: float = 0
-    supplier: str = ""; contact: str = ""; note: str = ""; confidence: str = ""
-class Section(BaseModel):
-    title: str; excl: bool = False; lines: List[Line] = []
-class Header(BaseModel):
-    client: str = ""; event: str = ""; job: str = ""
-    version: str = "Estimated Budget V1"; date: str = ""
-class Payload(BaseModel):
-    header: Header; sections: List[Section] = []
-    format: str = "xlsx"; filename: str = "Estimate"
+@app.post("/process")
+def process():
+    return pb.run()
+
+@app.get("/rates")
+def rates():
+    store = make_storage()
+    raw = store.read_text(os.getenv("RATES_KEY", "rates.json"), "[]")
+    try: data = json.loads(raw)
+    except Exception: data = []
+    return JSONResponse(content=data)
 
 @app.get("/health")
-def health(): return {"ok": True}
-
-@app.post("/generate")
-def generate(p: Payload):
-    payload = {"header": p.header.dict(),
-               "sections": [s.dict() for s in p.sections]}
-    if not payload["header"].get("date"):
-        payload["header"]["date"] = datetime.date.today().strftime("%d/%m/%Y")
-    is_pdf = (p.format == "pdf")
-    fd, path = tempfile.mkstemp(suffix=".pdf" if is_pdf else ".xlsx"); os.close(fd)
-    try:
-        if is_pdf:
-            EE.build_pdf(payload, path)
-            media = "application/pdf"
-        else:
-            EE.build_xlsx(payload, path)
-            media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        data = open(path, "rb").read()
-    finally:
-        try: os.remove(path)
-        except OSError: pass
-    fn = p.filename + (".pdf" if is_pdf else ".xlsx")
-    return Response(content=data, media_type=media,
-                    headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+def health():
+    return {"ok": True}
